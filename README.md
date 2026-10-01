@@ -12,7 +12,7 @@ On the Linux machine connected to the TC-08:
 docker compose up -d
 ```
 
-This builds the logger image on first use, creates a persistent administrator
+This builds InfluxDB and the logger on first use, creates a persistent administrator
 token, starts InfluxDB, waits for its health check, and starts USB acquisition.
 No host Python, Pico driver installation, manual token creation, or `.env` file
 is required. The database and table are created on the first successful upload.
@@ -37,6 +37,36 @@ The one-shot `influxdb-init` service finishing with `Exited (0)` is normal.
 InfluxDB and the logger use `restart: unless-stopped` and resume when Docker
 starts after a reboot. Driver errors cause the logger to restart; pending
 uploads survive restarts. Firmware initialization can delay the first reading.
+
+## InfluxDB source build and Raspberry Pi page sizes
+
+Both `influxdb` and `influxdb-init` build from `influxdb/Dockerfile`. The
+multi-stage build compiles **InfluxDB 3.11.5** from its pinned upstream release
+commit using Rust 1.97.1, then copies the binary into Debian Bookworm slim.
+Docker builds for the host architecture, including ARM64 on a 64-bit Pi.
+
+The build explicitly sets `JEMALLOC_SYS_WITH_LG_PAGE=16` (2^16 = 64 KiB).
+jemalloc's configured page size must be at least the runtime kernel's page
+size, so this supports 4, 16, and 64 KiB kernels, including Pi kernels with
+16 KiB pages, independently of the build host's page size. The binary is also
+linked with 64 KiB ELF segment alignment. InfluxDB's default features are
+retained. Python runtime libraries and `curl` are included for the processing
+engine and health check.
+
+The first Rust build is substantial: allow plenty of time, disk space, and
+RAM/swap, especially on a Pi. It uses two build jobs and disables release LTO
+to reduce peak memory. Set `INFLUXDB_BUILD_JOBS=1` in `.env` to reduce parallel
+compilation further. Build layers, Cargo downloads, and architecture-specific
+compilation artifacts are cached for reuse.
+
+To switch an existing installation to the source-built containers:
+
+```sh
+docker compose up -d --build
+```
+
+The data paths, node ID, and InfluxDB UID/GID (1500) match the previous image,
+so existing database and token volumes can be reused.
 
 ## Configure probes
 
@@ -155,6 +185,7 @@ previous host queue is not automatically imported.
 
 ```text
 compose.yaml              Database, token initialization, and USB logger
+influxdb/                 Source-built InfluxDB Dockerfile
 deploy/init-influxdb.sh    Idempotent token generation
 picologger/               Dockerfile, Python code, diagnostics, tests
 tools/                    Optional USB tracing source and GDB script
