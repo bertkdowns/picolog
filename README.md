@@ -45,13 +45,15 @@ multi-stage build compiles **InfluxDB 3.11.5** from its pinned upstream release
 commit using Rust 1.97.1, then copies the binary into Debian Bookworm slim.
 Docker builds for the host architecture, including ARM64 on a 64-bit Pi.
 
-The build explicitly sets `JEMALLOC_SYS_WITH_LG_PAGE=16` (2^16 = 64 KiB).
-jemalloc's configured page size must be at least the runtime kernel's page
-size, so this supports 4, 16, and 64 KiB kernels, including Pi kernels with
-16 KiB pages, independently of the build host's page size. The binary is also
-linked with 64 KiB ELF segment alignment. InfluxDB's default features are
-retained. Python runtime libraries and `curl` are included for the processing
-engine and health check.
+Build directly on the Pi that will run the database. Containers share the
+host kernel, so jemalloc detects that kernel's page size during compilation;
+no page-size overrides are applied. InfluxDB's default features are retained.
+Python runtime libraries and `curl` are included for the processing engine
+and health check.
+
+If the kernel page size changes, rebuild with
+`docker compose build --no-cache influxdb influxdb-init` before starting the
+stack. Do not reuse an image built on a host with a different page size.
 
 The first Rust build is substantial: allow plenty of time, disk space, and
 RAM/swap, especially on a Pi. It uses two build jobs and disables release LTO
@@ -95,6 +97,30 @@ optionally overrides the device's batch/serial identifier.
 Apply configuration changes with `docker compose up -d`. After editing Python
 code or the Dockerfile, run `docker compose up -d --build`.
 
+## Explorer web UI
+
+Compose also starts **InfluxDB 3 Explorer 1.9.0** (`influxdata/influxdb3-ui`)
+in admin mode. Open **http://localhost:8080** on the Docker host to query,
+visualize, and manage the database. The `Pico TC-08` server connection is
+automatically configured with `http://influxdb:8181`, the selected database,
+and the same token used by the logger.
+
+Explorer is a separate container because this stack uses **InfluxDB 3 Core**.
+The bundled Explorer introduced in version 3.11 applies to **Enterprise**.
+
+For access from another machine on your LAN, set `EXPLORER_BIND_ADDRESS=0.0.0.0`
+in `.env`, run `docker compose up -d`, then visit `http://<pi-address>:8080`.
+`EXPLORER_PORT` can change the host port. The UI has admin access through the
+configured token, so expose it only to users who should have that access.
+
+Explorer saves its settings and session key in `explorer-data`. Connection
+defaults for new browser sessions are generated in `explorer-config`; existing
+connections can be edited through the UI if you later change the database or token.
+
+```sh
+docker compose logs -f explorer
+```
+
 ## Query readings
 
 The query helper uses the shared token automatically:
@@ -135,11 +161,13 @@ Table `tc08` contains one row per enabled input plus CJC for each acquisition:
 Overflow readings retain the returned temperature. Non-finite readings retain
 their status without a temperature field. Filter on `valid = true` for analysis.
 
-Compose manages three named volumes:
+Compose manages five named volumes:
 
 - `influxdb-data`: database catalog, write-ahead log, and temperature data.
 - `influxdb-auth`: generated token, reused across restarts.
 - `logger-data`: durable SQLite upload queue at `/data/picolog.sqlite3`.
+- `explorer-config`: generated initial Explorer connection configuration.
+- `explorer-data`: Explorer settings and application database.
 
 Every sample is committed to SQLite before a background thread uploads it.
 Failed uploads are retried without blocking acquisition; acknowledged samples
@@ -148,8 +176,8 @@ The queue grows during database outages, so monitor disk space and upload logs.
 Keep the same database destination for a queue containing pending readings.
 
 `docker compose down` preserves the volumes. **`docker compose down -v` deletes
-the temperatures, token, and pending readings.** Back up all three volumes
-together. Keep the Compose project name/directory name stable to reuse them.
+the temperatures, token, pending readings, and Explorer settings.** Back up the
+volumes together. Keep the Compose project name/directory name stable to reuse them.
 
 InfluxDB 3 Core limits each query's time range to approximately 72 hours; use
 bounded time windows when querying history.
@@ -187,6 +215,7 @@ previous host queue is not automatically imported.
 compose.yaml              Database, token initialization, and USB logger
 influxdb/                 Source-built InfluxDB Dockerfile
 deploy/init-influxdb.sh    Idempotent token generation
+deploy/start-explorer.sh   Explorer IPv4 startup and persistent session key
 picologger/               Dockerfile, Python code, diagnostics, tests
 tools/                    Optional USB tracing source and GDB script
 local-artifacts/          Ignored local driver binaries and captured traces

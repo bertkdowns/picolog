@@ -5,8 +5,12 @@ services:
       args:
         CARGO_BUILD_JOBS: ${INFLUXDB_BUILD_JOBS:-2}
     entrypoint: ["/bin/sh", "/init-influxdb.sh"]
+    environment:
+      INFLUXDB_DATABASE: ${INFLUXDB_DATABASE:-picolog}
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-}
     volumes:
       - influxdb-auth:/var/lib/influxdb3
+      - explorer-config:/home/influxdb3/.influxdb3
       - ./deploy/init-influxdb.sh:/init-influxdb.sh:ro
 
   influxdb:
@@ -33,6 +37,21 @@ services:
       timeout: 3s
       retries: 20
       start_period: 10s
+
+  explorer:
+    image: influxdata/influxdb3-ui:1.9.0
+    entrypoint: ["/bin/sh", "/start-explorer.sh"]
+    command: ["--mode=admin"]
+    restart: unless-stopped
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    ports:
+      - "${EXPLORER_BIND_ADDRESS:-127.0.0.1}:${EXPLORER_PORT:-8080}:8080"
+    volumes:
+      - explorer-config:/app-root/config:ro
+      - explorer-data:/db
+      - ./deploy/start-explorer.sh:/start-explorer.sh:ro
 
   picologger:
     build: ./picologger
@@ -69,3 +88,5 @@ volumes:
   influxdb-data:
   influxdb-auth:
   logger-data:
+  explorer-config:
+  explorer-data:

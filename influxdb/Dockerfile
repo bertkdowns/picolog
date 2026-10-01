@@ -16,20 +16,21 @@ ARG CARGO_BUILD_JOBS=2
 ARG TARGETARCH
 ENV CARGO_BUILD_JOBS=${CARGO_BUILD_JOBS} \
     CARGO_PROFILE_RELEASE_LTO=false \
-    JEMALLOC_SYS_WITH_LG_PAGE=16 \
     PYO3_PYTHON=/usr/bin/python3 \
     RUSTUP_TOOLCHAIN=1.97.1 \
-    RUSTFLAGS="--cfg tokio_unstable -C link-arg=-fuse-ld=lld -C link-arg=-Wl,-z,max-page-size=65536 -C force-frame-pointers=yes"
+    RUSTFLAGS="--cfg tokio_unstable -C link-arg=-fuse-ld=lld -C force-frame-pointers=yes"
 
-# jemalloc's configured page size must be >= the runtime kernel page size.
-# Use 2^16 bytes rather than detecting the build host's (often 4 KiB) pages.
-# The allocator and ELF alignment therefore support 4/16/64 KiB kernel pages.
+# Build natively on the runtime host so jemalloc detects its kernel page size.
+# Do not force a page size or a different build platform.
 # Limit parallelism and disable release LTO to reduce peak build memory on Pi.
+# Keep native artifacts separate if the host's kernel page size changes.
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
     --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,id=picolog-influxdb-target-${TARGETARCH},target=/src/target,sharing=locked \
-    cargo build --locked --release --package influxdb3 --bin influxdb3 \
-    && install -Dm755 target/release/influxdb3 /out/influxdb3
+    target_dir="/src/target/$(getconf PAGESIZE)" \
+    && cargo build --locked --release --package influxdb3 --bin influxdb3 \
+      --target-dir "$target_dir" \
+    && install -Dm755 "$target_dir/release/influxdb3" /out/influxdb3
 
 FROM debian:bookworm-slim
 
