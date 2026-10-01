@@ -1,0 +1,69 @@
+services:
+  influxdb-init:
+    image: influxdb:3.11.5-core
+    entrypoint: ["/bin/sh", "/init-influxdb.sh"]
+    volumes:
+      - influxdb-auth:/var/lib/influxdb3
+      - ./deploy/init-influxdb.sh:/init-influxdb.sh:ro
+
+  influxdb:
+    image: influxdb:3.11.5-core
+    restart: unless-stopped
+    depends_on:
+      influxdb-init:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:8181:8181"
+    command:
+      - influxdb3
+      - serve
+      - --node-id=picolog
+      - --object-store=file
+      - --data-dir=/var/lib/influxdb3/data
+      - --admin-token-file=/run/picolog-auth/auth/admin-token.json
+      - --disable-authz=health
+    volumes:
+      - influxdb-data:/var/lib/influxdb3
+      - influxdb-auth:/run/picolog-auth:ro
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--silent", "http://localhost:8181/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  picologger:
+    build: ./picologger
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    environment:
+      INFLUXDB_URL: http://influxdb:8181
+      INFLUXDB_DATABASE: ${INFLUXDB_DATABASE:-picolog}
+      INFLUXDB_TOKEN_FILE: /run/picolog-auth/auth/admin-token.json
+      # Optional override when reusing an already-initialized database.
+      INFLUXDB_TOKEN: ${INFLUXDB_TOKEN:-}
+      TC08_CHANNELS: ${TC08_CHANNELS:-1:T,2:T,3:T,4:T,5:T,6:T,7:T,8:T}
+      TC08_INTERVAL: ${TC08_INTERVAL:-5}
+      TC08_MAINS: ${TC08_MAINS:-50}
+      TC08_DEVICE_ID: ${TC08_DEVICE_ID:-}
+    # Bind the bus directory so firmware re-enumeration and hotplug are visible.
+    # USB device major 189 covers changing bus/device numbers.
+    device_cgroup_rules:
+      - 'c 189:* rwm'
+    volumes:
+      - type: bind
+        source: /dev/bus/usb
+        target: /dev/bus/usb
+        bind:
+          create_host_path: false
+      - logger-data:/data
+      - influxdb-auth:/run/picolog-auth:ro
+
+volumes:
+  influxdb-data:
+  influxdb-auth:
+  logger-data:

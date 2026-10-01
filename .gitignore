@@ -1,0 +1,11 @@
+__pycache__/
+.env
+.env.*
+!.env.example
+data/
+local-artifacts/
+*.sqlite3*
+*.log
+*.deb
+*.so
+*.so.*
